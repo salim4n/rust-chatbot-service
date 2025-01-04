@@ -1,7 +1,7 @@
 mod azure_table;
 mod agent;
-mod agent_v2;
 
+use std::any::Any;
 use axum::{
     routing::{get, post},
     http::StatusCode,
@@ -9,25 +9,49 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::sync::Arc;
+use axum::extract::State;
 use azure_data_tables::{prelude::*};
 use azure_storage::prelude::*;
 use dotenv::dotenv;
+use langchain_rust::chain::Chain;
+use langchain_rust::prompt_args;
+use langchain_rust::schemas::Message;
+use crate::agent::{initialize_agent,  SYSTEM_PROMPT};
 use crate::azure_table::FormattedVectorEntity;
+use tokio::sync::Mutex;
+use langchain_rust::embedding::{Embedder,  FastEmbed};
+use langchain_rust::semantic_router::utils::cosine_similarity;
 
+struct AppState {
+    pub chat_history: Mutex<Vec<Message>>,
+    pub vectors: Vec<FormattedVectorEntity>,
+    pub fastembed: FastEmbed,
+}
 #[tokio::main]
 async fn main() {
     dotenv().ok();
     // initialize tracing
     tracing_subscriber::fmt::init();
 
+    let fastembed = FastEmbed::try_new().expect("Failed to initialize FastEmbed");
+    println!("FastEmbed initialized. Model info: {:?}", fastembed.type_id());
+    // Charger les vecteurs
+    let vectors = fetch_vectors_internal().await.expect("Failed to fetch vectors");
+
+    // Créer l'état de l'application
+    let app_state = Arc::new(AppState {
+        chat_history: Mutex::new(Vec::new()),
+        vectors,
+        fastembed,
+    });
     // build our application with routes
     let app = Router::new()
         // `GET /` goes to `root`
         .route("/", get(root))
-        // `POST /users` goes to `create_user`
-        .route("/users", post(create_user))
         // `POST /chat` goes to `answer`
         .route("/chat", post(answer))
+        .with_state(app_state)
         // `GET /vectors` goes to `fetch_vectors`
         .route("/vectors", get(fetch_vectors));
 
@@ -43,30 +67,49 @@ async fn root() -> &'static str {
     base_url
 }
 
-// handler to simulate a chatbot response
+
 async fn answer(
+    State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatMessage>,
 ) -> (StatusCode, Json<ChatResponse>) {
-    // Logic for processing the question and returning an answer
-    let answer_text = match payload.message.as_str() {
-        "What is the meaning of life?" => "42".to_string(),
-        _ => "I don't know!".to_string(),
+
+    let executor = initialize_agent().await;
+    let vectors = state.vectors.clone();
+    let user_vector = state.fastembed.embed_query(&payload.message).await.unwrap();
+
+    // Récupérez l'historique actuel
+    let mut chat_history = state.chat_history.lock().await;
+    // Ajoutez le nouveau message de l'utilisateur
+    chat_history.push(Message::new_human_message(payload.message.clone()));
+
+    // Préparez les variables d'entrée
+    let input_variables = prompt_args! {
+        "system" => SYSTEM_PROMPT,
+        "input" => payload.message,
+        "user_vector" => user_vector,
+        "history" => chat_history.clone(),
+        "context" => serde_json::to_string(&vectors).unwrap(),
     };
 
-    let response = ChatResponse {
-        answer: answer_text,
-    };
-
-    (StatusCode::OK, Json(response))
+    match executor.invoke(input_variables).await {
+        Ok(result) => {
+            let response = result;
+            // Ajoutez la réponse de l'AI à l'historique
+            chat_history.push(Message::new_ai_message(response.clone()));
+            (StatusCode::OK, Json(ChatResponse { answer: response }))
+        }
+        Err(e) => {
+            eprintln!("Error invoking LLMChain: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ChatResponse {
+                answer: format!("Error: {}", e),
+            }))
+        }
+    }
 }
-
-async fn fetch_vectors() -> Result<(StatusCode, Json<Vec<FormattedVectorEntity>>), (StatusCode, Json<String>)> {
-    // Appelle la fonction `get_all_vectors` ici et retourne les données sous forme de JSON
+async fn fetch_vectors_internal() -> Result<Vec<FormattedVectorEntity>, String> {
     // Charger les informations de configuration
-    let account =
-        env::var("STORAGE_ACCOUNT").expect("Set env variable STORAGE_ACCOUNT first!");
-    let access_key =
-        env::var("STORAGE_ACCESS_KEY").expect("Set env variable STORAGE_ACCESS_KEY first!");
+    let account = env::var("STORAGE_ACCOUNT").expect("Set env variable STORAGE_ACCOUNT first!");
+    let access_key = env::var("STORAGE_ACCESS_KEY").expect("Set env variable STORAGE_ACCESS_KEY first!");
     let table_name = env::var("STORAGE_TABLE_NAME").expect("Set env variable STORAGE_TABLE_NAME first!");
 
     let storage_credentials = StorageCredentials::access_key(account.clone(), access_key);
@@ -75,27 +118,20 @@ async fn fetch_vectors() -> Result<(StatusCode, Json<Vec<FormattedVectorEntity>>
 
     // Récupérer toutes les entités
     match azure_table::get_all_vectors(&table_client).await {
-        Ok(entities) => Ok((StatusCode::OK, Json(entities))),
+        Ok(entities) => Ok(entities),
         Err(e) => {
             // Log l'erreur si nécessaire
             eprintln!("Error fetching vectors: {:?}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(format!("Failed to fetch vectors: {}", e))))
+            Err(format!("Failed to fetch vectors: {}", e))
         }
     }
 }
-// handler to simulate user creation
-async fn create_user(
-    Json(payload): Json<CreateUser>,
-) -> (StatusCode, Json<User>) {
-    // insert your application logic here
-    let user = User {
-        id: 1337,
-        username: payload.username,
-    };
 
-    // this will be converted into a JSON response
-    // with a status code of `201 Created`
-    (StatusCode::CREATED, Json(user))
+async fn fetch_vectors() -> Result<(StatusCode, Json<Vec<FormattedVectorEntity>>), (StatusCode, Json<String>)> {
+    match fetch_vectors_internal().await {
+        Ok(entities) => Ok((StatusCode::OK, Json(entities))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(e))),
+    }
 }
 
 // Struct for chatbot messages
@@ -110,15 +146,4 @@ struct ChatResponse {
     answer: String,
 }
 
-// Struct for creating a user
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
-}
 
-// Struct for user response
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
-}
