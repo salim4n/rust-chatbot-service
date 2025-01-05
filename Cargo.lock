@@ -543,6 +543,7 @@ dependencies = [
  "azure_storage",
  "dotenv",
  "futures",
+ "futures-util",
  "langchain-rust",
  "ndarray",
  "serde",

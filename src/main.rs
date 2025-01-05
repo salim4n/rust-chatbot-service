@@ -17,11 +17,10 @@ use dotenv::dotenv;
 use langchain_rust::chain::Chain;
 use langchain_rust::prompt_args;
 use langchain_rust::schemas::Message;
-use crate::agent::{initialize_agent,  SYSTEM_PROMPT};
+use crate::agent::{find_relevant_documents, initialize_agent, initialize_chain, SYSTEM_PROMPT};
 use crate::azure_table::FormattedVectorEntity;
 use tokio::sync::Mutex;
 use langchain_rust::embedding::{Embedder,  FastEmbed};
-use langchain_rust::semantic_router::utils::cosine_similarity;
 
 struct AppState {
     pub chat_history: Mutex<Vec<Message>>,
@@ -72,34 +71,30 @@ async fn answer(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatMessage>,
 ) -> (StatusCode, Json<ChatResponse>) {
-
-    let executor = initialize_agent().await;
+    let chain = initialize_chain().await;
     let vectors = state.vectors.clone();
     let user_vector = state.fastembed.embed_query(&payload.message).await.unwrap();
 
-    // Récupérez l'historique actuel
     let mut chat_history = state.chat_history.lock().await;
-    // Ajoutez le nouveau message de l'utilisateur
     chat_history.push(Message::new_human_message(payload.message.clone()));
 
-    // Préparez les variables d'entrée
+    let relevant_docs = find_relevant_documents(&vectors, &user_vector);
+
     let input_variables = prompt_args! {
-        "system" => SYSTEM_PROMPT,
         "input" => payload.message,
-        "user_vector" => user_vector,
-        "history" => chat_history.clone(),
-        "context" => serde_json::to_string(&vectors).unwrap(),
+        "history" => format!("{:?}", chat_history),
+        "context" => serde_json::to_string(&relevant_docs).unwrap(),
+        "user_vector" => format!("{:?}", user_vector),
     };
 
-    match executor.invoke(input_variables).await {
+    match chain.invoke(input_variables).await {
         Ok(result) => {
-            let response = result;
-            // Ajoutez la réponse de l'AI à l'historique
+            let response = result.to_string();
             chat_history.push(Message::new_ai_message(response.clone()));
             (StatusCode::OK, Json(ChatResponse { answer: response }))
         }
         Err(e) => {
-            eprintln!("Error invoking LLMChain: {:?}", e);
+            eprintln!("Error invoking Chain: {:?}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(ChatResponse {
                 answer: format!("Error: {}", e),
             }))
