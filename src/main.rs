@@ -2,7 +2,7 @@ mod azure_table;
 mod agent;
 
 use std::any::Any;
-use axum::{routing::{get, post}, http::StatusCode, Json, Router, http};
+use axum::{routing::{get, post}, http::StatusCode, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -10,17 +10,14 @@ use axum::extract::State;
 use azure_data_tables::{prelude::*};
 use azure_storage::prelude::*;
 use dotenv::dotenv;
-use http::header::{ACCEPT, AUTHORIZATION, ORIGIN};
-use http::{HeaderValue, Method};
 use langchain_rust::chain::Chain;
 use langchain_rust::prompt_args;
 use langchain_rust::schemas::Message;
-use crate::agent::{find_relevant_documents, initialize_agent, initialize_chain, SYSTEM_PROMPT};
+use crate::agent::{find_relevant_documents, initialize_chain};
 use crate::azure_table::FormattedVectorEntity;
 use tokio::sync::Mutex;
 use langchain_rust::embedding::{Embedder,  FastEmbed};
-use tower_http::cors::{Any as CorsAny, AllowMethods, CorsLayer};
-use tower::ServiceBuilder;
+use tower_http::cors::{Any as CorsAny, CorsLayer};
 
 struct AppState {
     pub chat_history: Mutex<Vec<Message>>,
