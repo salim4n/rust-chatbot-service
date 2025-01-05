@@ -100,8 +100,6 @@ fn find_closest_match(vectors: Vec<FormattedVectorEntity>, query_vector: Vec<f32
 
     closest_matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     closest_matches.iter().map(|(entity, _)| entity.clone()).take(top_K).collect()
-
-
 }
 
 pub fn find_relevant_documents(vectors: &[FormattedVectorEntity], user_vector: &Vec<f64>) -> Vec<FormattedVectorEntity> {

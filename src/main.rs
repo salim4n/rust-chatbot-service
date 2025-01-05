@@ -2,11 +2,7 @@ mod azure_table;
 mod agent;
 
 use std::any::Any;
-use axum::{
-    routing::{get, post},
-    http::StatusCode,
-    Json, Router,
-};
+use axum::{routing::{get, post}, http::StatusCode, Json, Router, http};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -14,6 +10,8 @@ use axum::extract::State;
 use azure_data_tables::{prelude::*};
 use azure_storage::prelude::*;
 use dotenv::dotenv;
+use http::header::{ACCEPT, AUTHORIZATION, ORIGIN};
+use http::{HeaderValue, Method};
 use langchain_rust::chain::Chain;
 use langchain_rust::prompt_args;
 use langchain_rust::schemas::Message;
@@ -21,6 +19,8 @@ use crate::agent::{find_relevant_documents, initialize_agent, initialize_chain, 
 use crate::azure_table::FormattedVectorEntity;
 use tokio::sync::Mutex;
 use langchain_rust::embedding::{Embedder,  FastEmbed};
+use tower_http::cors::{Any as CorsAny, AllowMethods, CorsLayer};
+use tower::ServiceBuilder;
 
 struct AppState {
     pub chat_history: Mutex<Vec<Message>>,
@@ -32,6 +32,11 @@ async fn main() {
     dotenv().ok();
     // initialize tracing
     tracing_subscriber::fmt::init();
+    // Configuration des CORS
+    let cors = CorsLayer::new()
+        .allow_methods(CorsAny)
+        .allow_origin(CorsAny)
+        .allow_headers(CorsAny);
 
     let fastembed = FastEmbed::try_new().expect("Failed to initialize FastEmbed");
     println!("FastEmbed initialized. Model info: {:?}", fastembed.type_id());
@@ -46,13 +51,12 @@ async fn main() {
     });
     // build our application with routes
     let app = Router::new()
-        // `GET /` goes to `root`
         .route("/", get(root))
-        // `POST /chat` goes to `answer`
         .route("/chat", post(answer))
+        .route("/vectors", get(fetch_vectors))
         .with_state(app_state)
-        // `GET /vectors` goes to `fetch_vectors`
-        .route("/vectors", get(fetch_vectors));
+        .layer(cors);
+
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

@@ -10,6 +10,7 @@ tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1.0.217", features = ["derive"] }
 tracing-subscriber = "0.3.19"
 axum = "0.8.1"
+tower-http = { version = "0.6.2", features = ["cors"] }
 azure_storage = "0.21.0"
 azure_data_tables = "0.21.0"
 futures = "0.3.31"
@@ -20,3 +21,5 @@ serde_json = "1.0.134"
 anyhow = "1.0.95"
 ndarray = "0.16.1"
 futures-util = "0.3.31"
+http = "1.2.0"
+tower = "0.5.2"
