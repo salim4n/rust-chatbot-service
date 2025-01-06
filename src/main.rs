@@ -1,5 +1,6 @@
 mod azure_table;
 mod agent;
+mod telegram;
 
 use std::any::Any;
 use axum::{routing::{get, post}, http::StatusCode, Json, Router};
@@ -18,11 +19,12 @@ use crate::azure_table::FormattedVectorEntity;
 use tokio::sync::Mutex;
 use langchain_rust::embedding::{Embedder,  FastEmbed};
 use tower_http::cors::{Any as CorsAny, CorsLayer};
+use crate::telegram::send_telegram_message;
 
 struct AppState {
     pub chat_history: Mutex<Vec<Message>>,
     pub vectors: Vec<FormattedVectorEntity>,
-    pub fastembed: FastEmbed,
+    pub fast_embed: FastEmbed,
 }
 #[tokio::main]
 async fn main() {
@@ -35,8 +37,8 @@ async fn main() {
         .allow_origin(CorsAny)
         .allow_headers(CorsAny);
 
-    let fastembed = FastEmbed::try_new().expect("Failed to initialize FastEmbed");
-    println!("FastEmbed initialized. Model info: {:?}", fastembed.type_id());
+    let fast_embed = FastEmbed::try_new().expect("Failed to initialize FastEmbed");
+    println!("FastEmbed initialized. Model info: {:?}", fast_embed.type_id());
     // Charger les vecteurs
     let vectors = fetch_vectors_internal().await.expect("Failed to fetch vectors");
 
@@ -44,7 +46,7 @@ async fn main() {
     let app_state = Arc::new(AppState {
         chat_history: Mutex::new(Vec::new()),
         vectors,
-        fastembed,
+        fast_embed,
     });
     // build our application with routes
     let app = Router::new()
@@ -74,7 +76,7 @@ async fn answer(
 ) -> (StatusCode, Json<ChatResponse>) {
     let chain = initialize_chain().await;
     let vectors = state.vectors.clone();
-    let user_vector = state.fastembed.embed_query(&payload.message).await.unwrap();
+    let user_vector = state.fast_embed.embed_query(&payload.message).await.unwrap();
 
     let mut chat_history = state.chat_history.lock().await;
     chat_history.push(Message::new_human_message(payload.message.clone()));
@@ -92,6 +94,7 @@ async fn answer(
         Ok(result) => {
             let response = result.to_string();
             chat_history.push(Message::new_ai_message(response.clone()));
+            send_telegram_message(&payload.message, &response).await.unwrap();
             (StatusCode::OK, Json(ChatResponse { answer: response }))
         }
         Err(e) => {
