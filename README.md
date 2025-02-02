@@ -8,6 +8,8 @@ This project is an intelligent chatbot service developed for IgnitionAI, an agen
 
 ---
 
+Storing and Retrieving Embeddings in Azure Table with Rust: An Educational Tutorial
+
 ## Fonctionnalités / Features  
 
 - **FR** : Chatbot conversationnel basé sur le modèle GPT-4  
