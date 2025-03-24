@@ -10,6 +10,7 @@ struct VectorEntity {
     pub id: String,
     pub timestamp: Option<String>,
     pub vector: String,
+    #[serde(rename = "text")]
     pub content: Option<String>,
 }
 
